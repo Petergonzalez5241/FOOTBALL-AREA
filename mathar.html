@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MathAR - เกมคณิตศาสตร์ AR</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Mitr:wght@300;400;500;600&display=swap" rel="stylesheet">
+    
+    <!-- MediaPipe Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            font-family: 'Mitr', sans-serif;
+            margin: 0;
+            overflow: hidden;
+            background-color: #1a202c; /* Fallback background */
+        }
+        
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* Mirror the video so it feels like a natural mirror for AR */
+        #webcam-video {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+            z-index: 1;
+            opacity: 0.8;
+        }
+
+        #game-canvas {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            /* Do not mirror canvas, we handle mirroring in JS coordinates */
+        }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+        }
+
+        /* UI Overlays */
+        #ui-layer {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            z-index: 20;
+            pointer-events: none; /* Let clicks pass through to canvas for fallback */
+        }
+        
+        .pointer-events-auto {
+            pointer-events: auto;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <!-- Webcam feed -->
+        <video id="webcam-video" autoplay playsinline></video>
+        
+        <!-- Main Game Canvas -->
+        <canvas id="game-canvas"></canvas>
+
+        <!-- UI Overlays -->
+        <div id="ui-layer" class="flex flex-col justify-between p-6">
+            
+            <!-- Header (Score & Level) -->
+            <div id="header-ui" class="hidden flex justify-between items-start w-full pointer-events-none">
+                <div class="glass-panel text-white px-6 py-3 rounded-2xl text-xl font-medium">
+                    ด่านที่: <span id="level-display" class="font-bold text-yellow-300">1/10</span>
+                </div>
+                <div class="glass-panel text-white px-6 py-3 rounded-2xl text-xl font-medium">
+                    คะแนน: <span id="score-display" class="font-bold text-green-300">0</span>
+                </div>
+            </div>
+
+            <!-- Start Screen -->
+            <div id="start-screen" class="absolute inset-0 flex items-center justify-center pointer-events-auto transition-opacity duration-500">
+                <div class="glass-panel p-10 rounded-3xl text-center max-w-lg text-white">
+                    <h1 class="text-6xl font-bold mb-4 text-blue-300 drop-shadow-lg">MathAR</h1>
+                    <p class="text-xl mb-6">เกมแก้โจทย์คณิตศาสตร์ด้วยเทคโนโลยี AR</p>
+                    <div class="bg-black/30 p-4 rounded-xl mb-8 text-left text-sm space-y-2">
+                        <p>👆 <strong>การควบคุม:</strong></p>
+                        <p>- ใช้กล้องเว็บแคมเพื่อตรวจจับมือ</p>
+                        <p>- <strong>จีบนิ้ว</strong> (นิ้วโป้งแตะนิ้วชี้) เพื่อ "หยิบ" คำตอบ</p>
+                        <p>- <strong>กางนิ้ว</strong> เพื่อ "ปล่อย" คำตอบลงในช่องว่าง</p>
+                        <p class="text-yellow-200 mt-2">* หากกล้องใช้งานไม่ได้ สามารถใช้เมาส์คลิกลากแทนได้</p>
+                    </div>
+                    <button id="btn-start" class="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white font-bold py-4 px-12 rounded-full text-2xl shadow-[0_0_20px_rgba(59,130,246,0.5)] transition-all transform hover:scale-105">
+                        เข้าสู่เกม (Start)
+                    </button>
+                    <p id="loading-cam-msg" class="text-yellow-300 mt-4 hidden animate-pulse">กำลังเตรียมกล้อง...</p>
+                </div>
+            </div>
+
+            <!-- Game Over Screen -->
+            <div id="game-over-screen" class="absolute inset-0 flex items-center justify-center pointer-events-auto hidden">
+                <div class="glass-panel p-10 rounded-3xl text-center max-w-lg text-white">
+                    <h1 class="text-6xl font-bold mb-4 text-green-400 drop-shadow-lg">All Clear!</h1>
+                    <p class="text-2xl mb-2">ยินดีด้วย! คุณผ่านครบทุกด่านแล้ว</p>
+                    <p class="text-xl mb-8">คะแนนรวม: <span id="final-score" class="font-bold text-yellow-300"></span></p>
+                    <button id="btn-restart" class="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-8 rounded-full text-xl shadow-lg transition-all transform hover:scale-105">
+                        เล่นอีกครั้ง
+                    </button>
+                </div>
+            </div>
+
+            <!-- AI Status -->
+            <div id="ai-status" class="absolute bottom-6 left-1/2 transform -translate-x-1/2 glass-panel text-white px-6 py-2 rounded-full text-sm font-medium animate-pulse hidden">
+                กำลังหามือของคุณ...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // --- DOM Elements ---
+            const videoElement = document.getElementById('webcam-video');
+            const canvasElement = document.getElementById('game-canvas');
+            const canvasCtx = canvasElement.getContext('2d');
+            
+            const startScreen = document.getElementById('start-screen');
+            const btnStart = document.getElementById('btn-start');
+            const headerUi = document.getElementById('header-ui');
+            const levelDisplay = document.getElementById('level-display');
+            const scoreDisplay = document.getElementById('score-display');
+            const aiStatus = document.getElementById('ai-status');
+            const gameOverScreen = document.getElementById('game-over-screen');
+            const finalScoreEl = document.getElementById('final-score');
+            const btnRestart = document.getElementById('btn-restart');
+            const loadingCamMsg = document.getElementById('loading-cam-msg');
+
+            // --- Level Data (10 Levels: Easy to Hard) ---
+            const levelsData = [
+                { q: "1 + 1 = ?", a: "2", choices: ["1", "2", "3"] },
+                { q: "5 - 2 = ?", a: "3", choices: ["2", "3", "4"] },
+                { q: "3 + 4 = ?", a: "7", choices: ["6", "7", "8"] },
+                { q: "10 - 4 = ?", a: "6", choices: ["5", "6", "7"] },
+                { q: "2 x 3 = ?", a: "6", choices: ["5", "6", "7"] },
+                { q: "15 + 7 = ?", a: "22", choices: ["21", "22", "23"] },
+                { q: "4 x 4 = ?", a: "16", choices: ["12", "16", "20"] },
+                { q: "20 ÷ 4 = ?", a: "5", choices: ["4", "5", "6"] },
+                { q: "(2 x 5) + 3 = ?", a: "13", choices: ["11", "13", "15"] },
+                { q: "50 - (6 x 7) = ?", a: "8", choices: ["6", "8", "12"] }
+            ];
+
+            // --- Game State Variables ---
+            let gameState = 'START'; // START, PLAYING, GAMEOVER
+            let currentLevel = 0;
+            let score = 0;
+            
+            let cw = window.innerWidth;
+            let ch = window.innerHeight;
+            
+            // Pointer data (Mouse or AR)
+            let pointer = {
+                x: cw / 2, y: ch / 2,
+                isPinching: false,
+                wasPinching: false,
+                justPinched: false,
+                justReleased: false,
+                source: 'mouse', // 'mouse' or 'hand'
+                handDetected: false,
+                lastPinchMissTime: 0
+            };
+
+            // Game Objects
+            let choiceBlocks = [];
+            let targetSlot = null;
+            let draggedBlock = null;
+            let questionText = "";
+
+            // --- Resize Handler ---
+            function resize() {
+                cw = window.innerWidth;
+                ch = window.innerHeight;
+                canvasElement.width = cw;
+                canvasElement.height = ch;
+                if (gameState === 'PLAYING') {
+                    initLevel(currentLevel, true); // reposition objects on resize
+                }
+            }
+            window.addEventListener('resize', resize);
+            resize();
+
+            // --- Initialize Level ---
+            function initLevel(levelIdx, isResize = false) {
+                if (levelIdx >= levelsData.length) {
+                    endGame();
+                    return;
+                }
+                
+                const levelData = levelsData[levelIdx];
+                questionText = levelData.q;
+                
+                levelDisplay.innerText = `${levelIdx + 1}/${levelsData.length}`;
+                
+                // Set Target Slot (Center Bottom)
+                targetSlot = {
+                    x: cw / 2,
+                    y: ch * 0.65,
+                    width: 180,
+                    height: 100,
+                    answer: levelData.a
+                };
+
+                // Create Choice Blocks (Spread across top/middle)
+                if (!isResize) {
+                    choiceBlocks = [];
+                    // Shuffle choices
+                    const shuffledChoices = [...levelData.choices].sort(() => Math.random() - 0.5);
+                    
+                    const spacing = Math.min(250, cw / 3.5);
+                    const startX = cw / 2 - spacing;
+                    
+                    shuffledChoices.forEach((choice, index) => {
+                        choiceBlocks.push({
+                            id: index,
+                            text: choice,
+                            width: 140,
+                            height: 140,
+                            originalX: startX + (index * spacing),
+                            originalY: ch * 0.3,
+                            x: startX + (index * spacing),
+                            y: ch * 0.3,
+                            color: getColorByIndex(index)
+                        });
+                    });
+                } else {
+                    // Update positions if just resizing
+                    const spacing = Math.min(250, cw / 3.5);
+                    const startX = cw / 2 - spacing;
+                    choiceBlocks.forEach((block, index) => {
+                        if (block !== draggedBlock) {
+                            block.originalX = startX + (index * spacing);
+                            block.originalY = ch * 0.3;
+                            block.x = block.originalX;
+                            block.y = block.originalY;
+                        }
+                    });
+                }
+            }
+
+            function getColorByIndex(index) {
+                const colors = ['#f87171', '#60a5fa', '#34d399', '#fbbf24', '#a78bfa'];
+                return colors[index % colors.length];
+            }
+
+            // --- Input Handling (Mouse / Touch Fallback) ---
+            function updatePointerMouse(e) {
+                if(pointer.source === 'hand' && pointer.handDetected) return; // Prioritize hand if active
+                pointer.source = 'mouse';
+                let clientX = e.clientX;
+                let clientY = e.clientY;
+                
+                if (e.touches && e.touches.length > 0) {
+                    clientX = e.touches[0].clientX;
+                    clientY = e.touches[0].clientY;
+                }
+                
+                // Get mouse pos relative to canvas
+                const rect = canvasElement.getBoundingClientRect();
+                pointer.x = clientX - rect.left;
+                pointer.y = clientY - rect.top;
+            }
+
+            canvasElement.addEventListener('mousemove', updatePointerMouse);
+            canvasElement.addEventListener('touchmove', (e) => { updatePointerMouse(e); e.preventDefault(); }, {passive: false});
+
+            function onPointerDown(e) {
+                if(pointer.source === 'hand' && pointer.handDetected) return;
+                updatePointerMouse(e);
+                pointer.isPinching = true;
+            }
+            function onPointerUp(e) {
+                if(pointer.source === 'hand' && pointer.handDetected) return;
+                pointer.isPinching = false;
+            }
+
+            canvasElement.addEventListener('mousedown', onPointerDown);
+            canvasElement.addEventListener('mouseup', onPointerUp);
+            canvasElement.addEventListener('touchstart', (e) => { onPointerDown(e); }, {passive: false});
+            canvasElement.addEventListener('touchend', onPointerUp);
+
+            // --- MediaPipe Hands Setup ---
+            const hands = new Hands({
+                locateFile: (file) => {
+                    return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+                }
+            });
+            
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.7,
+                minTrackingConfidence: 0.5
+            });
+
+            hands.onResults((results) => {
+                if (gameState !== 'PLAYING') return;
+
+                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                    pointer.handDetected = true;
+                    pointer.source = 'hand';
+                    aiStatus.classList.add('hidden'); // Hide "Searching..."
+
+                    const landmarks = results.multiHandLandmarks[0];
+                    const indexFinger = landmarks[8]; // INDEX_FINGER_TIP
+                    const thumb = landmarks[4];       // THUMB_TIP
+
+                    // Map coordinates (Note: x is inverted because video is mirrored horizontally)
+                    pointer.x = (1 - indexFinger.x) * cw;
+                    pointer.y = indexFinger.y * ch;
+
+                    // Calculate distance for pinch (Pythagorean)
+                    // Aspect ratio compensation since video is landscape
+                    const dx = (1 - indexFinger.x) - (1 - thumb.x);
+                    const dy = indexFinger.y - thumb.y;
+                    const aspect = cw / ch;
+                    const distance = Math.sqrt((dx * aspect) * (dx * aspect) + dy * dy);
+
+                    // Threshold for pinching (adjust based on testing)
+                    const PINCH_THRESHOLD = 0.08;
+                    pointer.isPinching = distance < PINCH_THRESHOLD;
+
+                } else {
+                    pointer.handDetected = false;
+                    aiStatus.classList.remove('hidden'); // Show "Searching..."
+                }
+            });
+
+            // Camera Initialization
+            const camera = new Camera(videoElement, {
+                onFrame: async () => {
+                    if(gameState === 'PLAYING') {
+                        await hands.send({image: videoElement});
+                    }
+                },
+                width: 1280,
+                height: 720
+            });
+
+            // --- Game Logic Update ---
+            function update() {
+                if (gameState !== 'PLAYING') return;
+
+                // Process pointer state changes
+                pointer.justPinched = pointer.isPinching && !pointer.wasPinching;
+                pointer.justReleased = !pointer.isPinching && pointer.wasPinching;
+                
+                // Helper to check intersection
+                const isIntersecting = (px, py, block) => {
+                    return px >= block.x - block.width/2 && px <= block.x + block.width/2 &&
+                           py >= block.y - block.height/2 && py <= block.y + block.height/2;
+                };
+
+                // Logic 1: Find hovered block
+                let hoveredBlock = null;
+                // Search in reverse to get top-most drawn item
+                for (let i = choiceBlocks.length - 1; i >= 0; i--) {
+                    if (isIntersecting(pointer.x, pointer.y, choiceBlocks[i])) {
+                        hoveredBlock = choiceBlocks[i];
+                        break;
+                    }
+                }
+
+                // Logic 2: Grab a block
+                if (pointer.justPinched) {
+                    if (hoveredBlock) {
+                        draggedBlock = hoveredBlock;
+                    } else {
+                        // Pinch Missed
+                        pointer.lastPinchMissTime = Date.now();
+                    }
+                }
+
+                // Logic 3: Drag the block
+                if (pointer.isPinching && draggedBlock) {
+                    // Smoothing dragging (lerp)
+                    draggedBlock.x += (pointer.x - draggedBlock.x) * 0.4;
+                    draggedBlock.y += (pointer.y - draggedBlock.y) * 0.4;
+                }
+
+                // Logic 4: Drop the block
+                if (pointer.justReleased && draggedBlock) {
+                    // Check if dropped in Target Slot
+                    const inTargetX = Math.abs(draggedBlock.x - targetSlot.x) < (targetSlot.width/2 + draggedBlock.width/4);
+                    const inTargetY = Math.abs(draggedBlock.y - targetSlot.y) < (targetSlot.height/2 + draggedBlock.height/4);
+
+                    if (inTargetX && inTargetY) {
+                        // Snapped into slot
+                        if (draggedBlock.text === targetSlot.answer) {
+                            // Correct!
+                            score += 100;
+                            scoreDisplay.innerText = score;
+                            draggedBlock.x = targetSlot.x;
+                            draggedBlock.y = targetSlot.y;
+                            
+                            // Delay then next level
+                            setTimeout(() => {
+                                currentLevel++;
+                                initLevel(currentLevel);
+                            }, 1000);
+
+                        } else {
+                            // Wrong answer - snap back
+                            snapBack(draggedBlock);
+                        }
+                    } else {
+                        // Dropped outside - snap back
+                        snapBack(draggedBlock);
+                    }
+                    
+                    draggedBlock = null;
+                }
+                
+                pointer.wasPinching = pointer.isPinching;
+            }
+
+            function snapBack(block) {
+                // Simple animation to original pos could be added here, 
+                // but for simplicity, we just snap it back instantly
+                block.x = block.originalX;
+                block.y = block.originalY;
+            }
+
+            // --- Rendering ---
+            function draw() {
+                // Clear Canvas
+                canvasCtx.clearRect(0, 0, cw, ch);
+                
+                if (gameState !== 'PLAYING') return;
+
+                // 1. Draw Target Slot
+                if (targetSlot) {
+                    canvasCtx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+                    canvasCtx.beginPath();
+                    canvasCtx.roundRect(targetSlot.x - targetSlot.width/2, targetSlot.y - targetSlot.height/2, targetSlot.width, targetSlot.height, 20);
+                    canvasCtx.fill();
+                    
+                    canvasCtx.lineWidth = 4;
+                    canvasCtx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+                    canvasCtx.setLineDash([10, 10]);
+                    canvasCtx.stroke();
+                    canvasCtx.setLineDash([]);
+                    
+                    // Question text above slot
+                    canvasCtx.font = 'bold 48px Mitr';
+                    canvasCtx.textAlign = 'center';
+                    canvasCtx.textBaseline = 'middle';
+                    canvasCtx.fillStyle = '#fff';
+                    canvasCtx.shadowColor = 'rgba(0,0,0,0.8)';
+                    canvasCtx.shadowBlur = 10;
+                    
+                    // Format question replacing ? with empty space relative to slot
+                    let qText = questionText.replace('?', '   ');
+                    canvasCtx.fillText(qText, targetSlot.x, targetSlot.y - 120);
+                    canvasCtx.shadowBlur = 0; // reset
+                }
+
+                // 2. Draw Choice Blocks
+                // Draw non-dragged first, then dragged so it's on top
+                const drawBlock = (block, isDragging) => {
+                    canvasCtx.save();
+                    canvasCtx.translate(block.x, block.y);
+                    
+                    if (isDragging) {
+                        canvasCtx.scale(1.1, 1.1); // Slightly larger when dragged
+                    }
+                    
+                    // 2.5D Style Block
+                    const bWidth = block.width;
+                    const bHeight = block.height;
+                    
+                    // Shadow
+                    canvasCtx.fillStyle = 'rgba(0,0,0,0.3)';
+                    canvasCtx.beginPath();
+                    canvasCtx.roundRect(-bWidth/2 + 5, -bHeight/2 + 10, bWidth, bHeight, 20);
+                    canvasCtx.fill();
+
+                    // Main Body
+                    canvasCtx.fillStyle = block.color;
+                    canvasCtx.beginPath();
+                    canvasCtx.roundRect(-bWidth/2, -bHeight/2, bWidth, bHeight, 20);
+                    canvasCtx.fill();
+                    
+                    // Inner Top Highlight (Glass/3D effect)
+                    canvasCtx.fillStyle = 'rgba(255,255,255,0.2)';
+                    canvasCtx.beginPath();
+                    canvasCtx.roundRect(-bWidth/2, -bHeight/2, bWidth, bHeight/2, [20, 20, 0, 0]);
+                    canvasCtx.fill();
+
+                    // Border
+                    canvasCtx.strokeStyle = 'rgba(255,255,255,0.6)';
+                    canvasCtx.lineWidth = 2;
+                    canvasCtx.stroke();
+
+                    // Text
+                    canvasCtx.fillStyle = 'white';
+                    canvasCtx.font = 'bold 64px Mitr';
+                    canvasCtx.textAlign = 'center';
+                    canvasCtx.textBaseline = 'middle';
+                    canvasCtx.shadowColor = 'rgba(0,0,0,0.5)';
+                    canvasCtx.shadowBlur = 5;
+                    canvasCtx.fillText(block.text, 0, 5); // Slight offset for visual balance
+
+                    canvasCtx.restore();
+                };
+
+                choiceBlocks.forEach(block => {
+                    if (block !== draggedBlock) drawBlock(block, false);
+                });
+                if (draggedBlock) {
+                    drawBlock(draggedBlock, true);
+                }
+
+                // 3. Draw Cursor Feedback
+                const isHovering = choiceBlocks.some(b => 
+                    pointer.x >= b.x - b.width/2 && pointer.x <= b.x + b.width/2 &&
+                    pointer.y >= b.y - b.height/2 && pointer.y <= b.y + b.height/2
+                );
+
+                canvasCtx.beginPath();
+                canvasCtx.arc(pointer.x, pointer.y, 20, 0, Math.PI * 2);
+                canvasCtx.lineWidth = 4;
+                canvasCtx.setLineDash([]);
+                
+                // Cursor State Colors
+                if (draggedBlock) {
+                    // จับสำเร็จ: วงกลมสีเขียว พร้อมสัญลักษณ์ ✔️
+                    canvasCtx.strokeStyle = '#22c55e'; // Green-500
+                    canvasCtx.fillStyle = 'rgba(34, 197, 94, 0.3)';
+                    canvasCtx.fill();
+                    canvasCtx.stroke();
+                    
+                    canvasCtx.fillStyle = 'white';
+                    canvasCtx.font = '20px Arial';
+                    canvasCtx.textAlign = 'center';
+                    canvasCtx.textBaseline = 'middle';
+                    canvasCtx.fillText('✔️', pointer.x, pointer.y);
+                } 
+                else if (Date.now() - pointer.lastPinchMissTime < 300) {
+                    // จีบนิ้ววืด (ไม่โดนเป้าหมาย): วงกลมสีแดง
+                    canvasCtx.strokeStyle = '#ef4444'; // Red-500
+                    canvasCtx.stroke();
+                }
+                else if (isHovering) {
+                    // เล็งตรงเป้าหมาย (Hover): วงกลมสีเหลืองเส้นประ
+                    canvasCtx.strokeStyle = '#eab308'; // Yellow-500
+                    canvasCtx.setLineDash([5, 5]);
+                    canvasCtx.stroke();
+                }
+                else {
+                    // ปกติ: วงกลมสีฟ้า
+                    canvasCtx.strokeStyle = '#3b82f6'; // Blue-500
+                    canvasCtx.stroke();
+                    
+                    // Inner dot
+                    canvasCtx.beginPath();
+                    canvasCtx.arc(pointer.x, pointer.y, 4, 0, Math.PI * 2);
+                    canvasCtx.fillStyle = '#3b82f6';
+                    canvasCtx.fill();
+                }
+                canvasCtx.setLineDash([]); // Reset
+            }
+
+            // --- Main Game Loop ---
+            function gameLoop() {
+                update();
+                draw();
+                requestAnimationFrame(gameLoop);
+            }
+
+            function startGame() {
+                loadingCamMsg.classList.remove('hidden');
+                btnStart.disabled = true;
+                
+                camera.start().then(() => {
+                    startScreen.classList.add('hidden');
+                    headerUi.classList.remove('hidden');
+                    aiStatus.classList.remove('hidden');
+                    gameState = 'PLAYING';
+                    currentLevel = 0;
+                    score = 0;
+                    scoreDisplay.innerText = score;
+                    initLevel(currentLevel);
+                }).catch(err => {
+                    console.error("Camera failed to start:", err);
+                    alert("ไม่สามารถเปิดกล้องได้ เกมจะเปลี่ยนโหมดเป็นการใช้เมาส์เล่น");
+                    
+                    // Fallback Mode (No Cam)
+                    startScreen.classList.add('hidden');
+                    headerUi.classList.remove('hidden');
+                    aiStatus.classList.add('hidden'); // No AI status
+                    gameState = 'PLAYING';
+                    currentLevel = 0;
+                    score = 0;
+                    scoreDisplay.innerText = score;
+                    
+                    // Dark background for fallback
+                    document.body.style.backgroundColor = '#1a202c';
+                    
+                    initLevel(currentLevel);
+                });
+            }
+
+            function endGame() {
+                gameState = 'GAMEOVER';
+                headerUi.classList.add('hidden');
+                aiStatus.classList.add('hidden');
+                gameOverScreen.classList.remove('hidden');
+                finalScoreEl.innerText = score;
+                canvasCtx.clearRect(0, 0, cw, ch);
+            }
+
+            // Event Listeners
+            btnStart.addEventListener('click', startGame);
+            
+            btnRestart.addEventListener('click', () => {
+                gameOverScreen.classList.add('hidden');
+                headerUi.classList.remove('hidden');
+                gameState = 'PLAYING';
+                currentLevel = 0;
+                score = 0;
+                scoreDisplay.innerText = score;
+                if(pointer.source === 'hand') aiStatus.classList.remove('hidden');
+                initLevel(currentLevel);
+            });
+
+            // Start Render Loop
+            requestAnimationFrame(gameLoop);
+        });
+    </script>
+</body>
+</html>
