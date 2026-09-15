@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FootballAR - เกมทายชื่อนักฟุตบอล (ระดับฮาร์ดคอร์ + เฉลยความแม่นยำสูง)</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Mitr:wght@300;400;500;600&display=swap" rel="stylesheet">
+    
+    <!-- MediaPipe Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            font-family: 'Mitr', sans-serif;
+            margin: 0;
+            overflow: hidden;
+            background-color: #090d16;
+        }
+        
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #webcam-video {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+            z-index: 1;
+            opacity: 0.75;
+        }
+
+        #game-canvas {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+        }
+
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            box-shadow: 0 10px 35px 0 rgba(0, 0, 0, 0.5);
+        }
+
+        #ui-layer {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            z-index: 20;
+            pointer-events: none;
+        }
+        
+        .pointer-events-auto {
+            pointer-events: auto;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <video id="webcam-video" autoplay playsinline></video>
+        <canvas id="game-canvas"></canvas>
+
+        <div id="ui-layer" class="flex flex-col justify-between p-6">
+            
+            <div id="header-ui" class="hidden flex justify-between items-start w-full pointer-events-none">
+                <div class="glass-panel text-white px-6 py-3 rounded-2xl text-xl font-medium flex items-center gap-3">
+                    <span>ระดับความยาก (Hardcore):</span> <span id="level-display" class="font-bold text-yellow-400">1/10</span>
+                </div>
+                <div class="glass-panel text-white px-6 py-3 rounded-2xl text-xl font-medium">
+                    คะแนน: <span id="score-display" class="font-bold text-emerald-400">0</span>
+                </div>
+            </div>
+
+            <!-- Start Screen -->
+            <div id="start-screen" class="absolute inset-0 flex items-center justify-center pointer-events-auto transition-opacity duration-500 bg-slate-950/85">
+                <div class="glass-panel p-10 rounded-3xl text-center max-w-xl text-white">
+                    <h1 class="text-5xl font-extrabold mb-3 text-amber-400 drop-shadow-lg">⚽ FootballAR</h1>
+                    <p class="text-xl font-medium text-emerald-300 mb-2">โหมดท้าทายประวัติศาสตร์ฟุตบอลเชิงลึก (แม่นยำสูง + เฉลย)</p>
+                    <p class="text-sm text-slate-300 mb-6">10 ด่านสุดหินจากสถิติ สถิติโลก และเกียรติประวัติระดับตำนาน</p>
+                    
+                    <div class="bg-black/50 p-4 rounded-xl mb-8 text-left text-sm space-y-2 border border-slate-700">
+                        <p class="text-amber-300 font-semibold">📌 วิธีการเล่น & ควบคุม:</p>
+                        <p>- อ่านโจทย์ประวัติศาสตร์ฟุตบอลที่ปรากฏขึ้นกลางจอ</p>
+                        <p>- <strong>จีบนิ้ว</strong> (นิ้วโป้งแตะนิ้วชี้) ผ่านกล้อง เพื่อหยิบชื่อคำตอบ</p>
+                        <p>- <strong>กางนิ้ว</strong> เพื่อปล่อยวางลงในช่องคำตอบ</p>
+                        <p class="text-yellow-200 text-xs">* หรือใช้เมาส์ / ทัชสกรีนลากวางแทนได้เช่นกัน</p>
+                    </div>
+
+                    <button id="btn-start" class="bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white font-bold py-4 px-12 rounded-full text-2xl shadow-[0_0_25px_rgba(245,158,11,0.5)] transition-all transform hover:scale-105">
+                        เริ่มเกมทายนักเตะ (Start)
+                    </button>
+                    <p id="loading-cam-msg" class="text-yellow-300 mt-4 hidden animate-pulse">กำลังเตรียมกล้องและโหลดระบบ MediaPipe AR...</p>
+                </div>
+            </div>
+
+            <!-- Game Over / Solution Screen -->
+            <div id="game-over-screen" class="absolute inset-0 flex items-center justify-center pointer-events-auto hidden bg-slate-950/90 overflow-y-auto py-10">
+                <div class="glass-panel p-8 rounded-3xl text-center max-w-2xl text-white my-auto">
+                    <h1 class="text-5xl font-extrabold mb-2 text-amber-400 drop-shadow-lg">🏆 สุดยอดแฟนพันธุ์แท้ฟุตบอล!</h1>
+                    <p class="text-xl mb-2">คุณผ่านการทดสอบประวัติศาสตร์ฟุตบอล 10 ด่านระดับฮาร์ดคอร์เรียบร้อยแล้ว</p>
+                    <p class="text-2xl mb-6">คะแนนรวมทั้งหมด: <span id="final-score" class="font-bold text-yellow-400"></span> / 1000</p>
+                    
+                    <div class="bg-slate-900/80 p-5 rounded-2xl mb-6 text-left border border-slate-700 max-h-60 overflow-y-auto">
+                        <h3 class="text-emerald-400 font-bold mb-3 text-lg">💡 สรุปเฉลยที่มีความถูกต้องแม่นยำสูงทั้ง 10 ด่าน:</h3>
+                        <ul id="solutions-list" class="space-y-2 text-sm text-slate-200">
+                            <!-- Populated dynamically -->
+                        </ul>
+                    </div>
+
+                    <button id="btn-restart" class="bg-amber-500 hover:bg-amber-600 text-white font-bold py-3 px-10 rounded-full text-xl shadow-lg transition-all transform hover:scale-105">
+                        เล่นท้าทายใหม่อีกครั้ง
+                    </button>
+                </div>
+            </div>
+
+            <!-- AI Status Banner -->
+            <div id="ai-status" class="absolute bottom-6 left-1/2 transform -translate-x-1/2 glass-panel text-white px-6 py-2 rounded-full text-sm font-medium animate-pulse hidden">
+                กำลังหามือของคุณ... (หรือใช้เมาส์ลากได้เลย)
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const videoElement = document.getElementById('webcam-video');
+            const canvasElement = document.getElementById('game-canvas');
+            const canvasCtx = canvasElement.getContext('2d');
+            
+            const startScreen = document.getElementById('start-screen');
+            const btnStart = document.getElementById('btn-start');
+            const headerUi = document.getElementById('header-ui');
+            const levelDisplay = document.getElementById('level-display');
+            const scoreDisplay = document.getElementById('score-display');
+            const aiStatus = document.getElementById('ai-status');
+            const gameOverScreen = document.getElementById('game-over-screen');
+            const finalScoreEl = document.getElementById('final-score');
+            const btnRestart = document.getElementById('btn-restart');
+            const loadingCamMsg = document.getElementById('loading-cam-msg');
+            const solutionsList = document.getElementById('solutions-list');
+
+            // 10 Factually Verified Hardcore Football Trivia Levels (Graded from easy-hardcore to extreme historical accuracy)
+            const levelsData = [
+                { 
+                    bio: "ด่าน 1: เจ้าของสถิติแอสซิสต์สูงสุด 20 ครั้งใน 1 ฤดูกาลพรีเมียร์ลีกอังกฤษ (เท่ากับ เธียร์รี อองรี) และคว้าแชมป์พรีเมียร์ลีกหลายสมัยกับแมนเชสเตอร์ ซิตี้", 
+                    a: "Kevin De Bruyne",
+                    choices: ["Mesut Özil", "Kevin De Bruyne", "Cesc Fàbregas"],
+                    explanation: "Kevin De Bruyne - ทำสถิติแอสซิสต์ 20 ครั้งในฤดูกาล 2019/20 ทาบสถิติสูงสุดตลอดกาลของ เธียร์รี อองรี"
+                },
+                { 
+                    bio: "ด่าน 2: ผู้รักษาประตูคนแรกและคนเดียวในประวัติศาสตร์ฟุตบอลที่คว้ารางวัล บัลลงดอร์ (ปี 1963) เจ้าของฉายา 'แมงมุมดำ'", 
+                    a: "Lev Yashin",
+                    choices: ["Lev Yashin", "Gianluigi Buffon", "Manuel Neuer"],
+                    explanation: "Lev Yashin (เลฟ ยาชิน) - นายทวารโซเวียตผู้สร้างตำนานคว้ารางวัลบัลลงดอร์อันทรงเกียรติ"
+                },
+                { 
+                    bio: "ด่าน 3: กองหน้าทีมชาติอังกฤษผู้ทำแฮตทริกในรอบชิงชนะเลิศฟุตบอลโลก 1966 ช่วยให้สิงโตคำรามคว้าแชมป์โลกสมัยเดียวในประวัติศาสตร์", 
+                    a: "Geoff Hurst",
+                    choices: ["Bobby Charlton", "Geoff Hurst", "Jimmy Greaves"],
+                    explanation: "Geoff Hurst (เจฟฟ์ เฮิร์สต์) - นักเตะคนเดียวที่ยิงแฮตทริกในนัดชิงชนะเลิศฟุตบอลโลกชาย"
+                },
+                { 
+                    bio: "ด่าน 4: จอมทัพทีมชาติฝรั่งเศส ผู้โหม่ง 2 ประตูใส่บราซิลในนัดชิงชนะเลิศฟุตบอลโลก 1998 และคว้าแชมป์ยูโร 2000", 
+                    a: "Zinedine Zidane",
+                    choices: ["Michel Platini", "Zinedine Zidane", "Didier Deschamps"],
+                    explanation: "Zinedine Zidane (ซีเนดีน ซีดาน) - เพลย์เมกเกอร์ระดับตำนานผู้นำฝรั่งเศสครองแชมป์โลกและแชมป์ยุโรป"
+                },
+                { 
+                    bio: "ด่าน 5: กองหน้าชาวบราซิล เจ้าของสถิติยิงประตูสูงสุดในฟุตบอลโลกรอบสุดท้าย (15 ประตู) ก่อนที่มิโรสลาฟ โคลเซ่ จะทำลายลง", 
+                    a: "Ronaldo Nazário",
+                    choices: ["Romário", "Ronaldo Nazário", "Pelé"],
+                    explanation: "Ronaldo Nazário (โรนัลโด้ นาซาริโอ - โล้นทองคำ) - ดาวยิงระดับโลกเจ้าของรางวัลบัลลงดอร์ 2 สมัย"
+                },
+                { 
+                    bio: "ด่าน 6: กองหลังเชิงสูงกัปตันทีมชาติอิตาลีชุดแชมป์โลก 2006 และเป็นกองหลังคนล่าสุดที่คว้ารางวัล บัลลงดอร์", 
+                    a: "Fabio Cannavaro",
+                    choices: ["Paolo Maldini", "Fabio Cannavaro", "Alessandro Nesta"],
+                    explanation: "Fabio Cannavaro (ฟาบิโอ คันนาวาโร) - แนวรับผู้พาอิตาลีคว้าแชมป์โลกและคว้ารางวัลนักเตะยอดเยี่ยมแห่งปี 2006"
+                },
+                { 
+                    bio: "ด่าน 7: ปีกความเร็วสูงชาวเวลส์ ผู้ยิงประตูชัยเหนือ บาร์เซโลนา ในโกปาเดลเรย์ และคว้าแชมป์ยูฟ่าแชมเปียนส์ลีก 5 สมัยกับเรอัล มาดริด", 
+                    a: "Gareth Bale",
+                    choices: ["Ryan Giggs", "Gareth Bale", "Aaron Ramsey"],
+                    explanation: "Gareth Bale (แกเร็ธ เบล) - เจ้าของฉายาพญานาคราช ผู้สร้างตำนานลูกยิงโอเวอร์เฮดคิกนัดชิง UCL 2018"
+                },
+                { 
+                    bio: "ด่าน 8: กองกลางตัวรับชาวฝรั่งเศส ผู้ปิดทองหลังพระ มีสถิติวิ่งครอบคลุมสนามมหาศาล พาทีมชาติฝรั่งเศสคว้าแชมป์โลก 2018", 
+                    a: "N'Golo Kanté",
+                    choices: ["Paul Pogba", "N'Golo Kanté", "Claude Makelele"],
+                    explanation: "N'Golo Kanté (เอ็นโกโล ก็องเต) - มิดฟิลด์ตัวรับผู้ขับเคลื่อนเลสเตอร์และเชลซีสู่แชมป์ประวัติศาสตร์"
+                },
+                { 
+                    bio: "ด่าน 9: ผู้จัดการทีมชาวสก็อตแลนด์ ผู้พาแมนเชสเตอร์ ยูไนเต็ด คว้าแชมป์พรีเมียร์ลีก 13 สมัย และยูฟ่าแชมเปียนส์ลีก 2 สมัย", 
+                    a: "Sir Alex Ferguson",
+                    choices: ["Matt Busby", "Sir Alex Ferguson", "Arsène Wenger"],
+                    explanation: "Sir Alex Ferguson (เซอร์ อเล็กซ์ เฟอร์กูสัน) - บรมครูผู้จัดการทีมที่ประสบความสำเร็จสูงสุดในฟุตบอลอังกฤษ"
+                },
+                { 
+                    bio: "ด่าน 10: ดาวยิงผู้สร้างเทพนิยายปาฏิหาริย์ 5000-1 พาเลสเตอร์ ซิตี้ คว้าแชมป์พรีเมียร์ลีก พร้อมสถิติยิงติดต่อกัน 11 นัดรวด", 
+                    a: "Jamie Vardy",
+                    choices: ["Riyad Mahrez", "Jamie Vardy", "N'Golo Kanté"],
+                    explanation: "Jamie Vardy (เจมี วาร์ดี) - ดาวยิงจากลีกล่างสู่ตำนานแชมป์พรีเมียร์ลีกกับสุนัจจิ้งจอกสยาม เลสเตอร์ ซิตี้"
+                }
+            ];
+
+            let gameState = 'START'; 
+            let currentLevel = 0;
+            let score = 0;
+            
+            let cw = window.innerWidth;
+            let ch = window.innerHeight;
+            
+            let pointer = {
+                x: cw / 2, y: ch / 2,
+                isPinching: false,
+                wasPinching: false,
+                justPinched: false,
+                justReleased: false,
+                source: 'mouse',
+                handDetected: false,
+                lastPinchMissTime: 0
+            };
+
+            let choiceBlocks = [];
+            let targetSlot = null;
+            let draggedBlock = null;
+            let playerBio = "";
+
+            function resize() {
+                cw = window.innerWidth;
+                ch = window.innerHeight;
+                canvasElement.width = cw;
+                canvasElement.height = ch;
+                if (gameState === 'PLAYING') {
+                    initLevel(currentLevel, true);
+                }
+            }
+            window.addEventListener('resize', resize);
+            resize();
+
+            function initLevel(levelIdx, isResize = false) {
+                if (levelIdx >= levelsData.length) {
+                    endGame();
+                    return;
+                }
+                
+                const levelData = levelsData[levelIdx];
+                playerBio = levelData.bio;
+                
+                levelDisplay.innerText = `${levelIdx + 1}/${levelsData.length}`;
+                
+                targetSlot = {
+                    x: cw / 2,
+                    y: ch * 0.73,
+                    width: 390,
+                    height: 100,
+                    answer: levelData.a
+                };
+
+                if (!isResize) {
+                    choiceBlocks = [];
+                    const shuffledChoices = [...levelData.choices].sort(() => Math.random() - 0.5);
+                    
+                    const spacing = Math.min(330, cw / 3.3);
+                    const startX = cw / 2 - spacing;
+                    
+                    shuffledChoices.forEach((choice, index) => {
+                        choiceBlocks.push({
+                            id: index,
+                            text: choice,
+                            width: 300,
+                            height: 90,
+                            originalX: startX + (index * spacing),
+                            originalY: ch * 0.44,
+                            x: startX + (index * spacing),
+                            y: ch * 0.44,
+                            color: getColorByIndex(index)
+                        });
+                    });
+                } else {
+                    const spacing = Math.min(330, cw / 3.3);
+                    const startX = cw / 2 - spacing;
+                    choiceBlocks.forEach((block, index) => {
+                        if (block !== draggedBlock) {
+                            block.originalX = startX + (index * spacing);
+                            block.originalY = ch * 0.44;
+                            block.x = block.originalX;
+                            block.y = block.originalY;
+                        }
+                    });
+                }
+            }
+
+            function getColorByIndex(index) {
+                const colors = ['#d97706', '#059669', '#2563eb', '#7c3aed', '#dc2626'];
+                return colors[index % colors.length];
+            }
+
+            function updatePointerMouse(e) {
+                if(pointer.source === 'hand' && pointer.handDetected) return;
+                pointer.source = 'mouse';
+                let clientX = e.clientX;
+                let clientY = e.clientY;
+                
+                if (e.touches && e.touches.length > 0) {
+                    clientX = e.touches[0].clientX;
+                    clientY = e.touches[0].clientY;
+                }
+                
+                const rect = canvasElement.getBoundingClientRect();
+                pointer.x = clientX - rect.left;
+                pointer.y = clientY - rect.top;
+            }
+
+            canvasElement.addEventListener('mousemove', updatePointerMouse);
+            canvasElement.addEventListener('touchmove', (e) => { updatePointerMouse(e); e.preventDefault(); }, {passive: false});
+
+            function onPointerDown(e) {
+                if(pointer.source === 'hand' && pointer.handDetected) return;
+                updatePointerMouse(e);
+                pointer.isPinching = true;
+            }
+            function onPointerUp(e) {
+                if(pointer.source === 'hand' && pointer.handDetected) return;
+                pointer.isPinching = false;
+            }
+
+            canvasElement.addEventListener('mousedown', onPointerDown);
+            canvasElement.addEventListener('mouseup', onPointerUp);
+            canvasElement.addEventListener('touchstart', (e) => { onPointerDown(e); }, {passive: false});
+            canvasElement.addEventListener('touchend', onPointerUp);
+
+            const hands = new Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+            
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.75,
+                minTrackingConfidence: 0.6
+            });
+
+            hands.onResults((results) => {
+                if (gameState !== 'PLAYING') return;
+
+                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                    pointer.handDetected = true;
+                    pointer.source = 'hand';
+                    aiStatus.classList.add('hidden');
+
+                    const landmarks = results.multiHandLandmarks[0];
+                    const indexFinger = landmarks[8];
+                    const thumb = landmarks[4];
+
+                    pointer.x = (1 - indexFinger.x) * cw;
+                    pointer.y = indexFinger.y * ch;
+
+                    const dx = (1 - indexFinger.x) - (1 - thumb.x);
+                    const dy = indexFinger.y - thumb.y;
+                    const aspect = cw / ch;
+                    const distance = Math.sqrt((dx * aspect) * (dx * aspect) + dy * dy);
+
+                    const PINCH_THRESHOLD = 0.08;
+                    pointer.isPinching = distance < PINCH_THRESHOLD;
+                } else {
+                    pointer.handDetected = false;
+                    aiStatus.classList.remove('hidden');
+                }
+            });
+
+            const camera = new Camera(videoElement, {
+                onFrame: async () => {
+                    if(gameState === 'PLAYING') {
+                        await hands.send({image: videoElement});
+                    }
+                },
+                width: 1280,
+                height: 720
+            });
+
+            function update() {
+                if (gameState !== 'PLAYING') return;
+
+                pointer.justPinched = pointer.isPinching && !pointer.wasPinching;
+                pointer.justReleased = !pointer.isPinching && pointer.wasPinching;
+                
+                const isIntersecting = (px, py, block) => {
+                    return px >= block.x - block.width/2 && px <= block.x + block.width/2 &&
+                           py >= block.y - block.height/2 && py <= block.y + block.height/2;
+                };
+
+                let hoveredBlock = null;
+                for (let i = choiceBlocks.length - 1; i >= 0; i--) {
+                    if (isIntersecting(pointer.x, pointer.y, choiceBlocks[i])) {
+                        hoveredBlock = choiceBlocks[i];
+                        break;
+                    }
+                }
+
+                if (pointer.justPinched) {
+                    if (hoveredBlock) {
+                        draggedBlock = hoveredBlock;
+                    } else {
+                        pointer.lastPinchMissTime = Date.now();
+                    }
+                }
+
+                if (pointer.isPinching && draggedBlock) {
+                    draggedBlock.x += (pointer.x - draggedBlock.x) * 0.4;
+                    draggedBlock.y += (pointer.y - draggedBlock.y) * 0.4;
+                }
+
+                if (pointer.justReleased && draggedBlock) {
+                    const inTargetX = Math.abs(draggedBlock.x - targetSlot.x) < (targetSlot.width/2 + draggedBlock.width/4);
+                    const inTargetY = Math.abs(draggedBlock.y - targetSlot.y) < (targetSlot.height/2 + draggedBlock.height/4);
+
+                    if (inTargetX && inTargetY) {
+                        if (draggedBlock.text === targetSlot.answer) {
+                            score += 100;
+                            scoreDisplay.innerText = score;
+                            draggedBlock.x = targetSlot.x;
+                            draggedBlock.y = targetSlot.y;
+                            
+                            setTimeout(() => {
+                                currentLevel++;
+                                initLevel(currentLevel);
+                            }, 1000);
+                        } else {
+                            snapBack(draggedBlock);
+                        }
+                    } else {
+                        snapBack(draggedBlock);
+                    }
+                    draggedBlock = null;
+                }
+                
+                pointer.wasPinching = pointer.isPinching;
+            }
+
+            function snapBack(block) {
+                block.x = block.originalX;
+                block.y = block.originalY;
+            }
+
+            function draw() {
+                canvasCtx.clearRect(0, 0, cw, ch);
+                
+                if (gameState !== 'PLAYING') return;
+
+                // Draw Clue Board Panel
+                canvasCtx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+                canvasCtx.beginPath();
+                const boxW = Math.min(950, cw * 0.88);
+                const boxH = 155;
+                canvasCtx.roundRect(cw/2 - boxW/2, ch * 0.12, boxW, boxH, 20);
+                canvasCtx.fill();
+                canvasCtx.lineWidth = 2;
+                canvasCtx.strokeStyle = 'rgba(245, 158, 11, 0.6)';
+                canvasCtx.stroke();
+
+                canvasCtx.font = 'bold 22px Mitr';
+                canvasCtx.fillStyle = '#fbbf24';
+                canvasCtx.textAlign = 'center';
+                canvasCtx.textBaseline = 'top';
+                canvasCtx.fillText("⚽ โจทย์ประวัติศาสตร์ฟุตบอลเชิงลึก (แม่นยำสูง)", cw/2, ch * 0.14);
+
+                canvasCtx.font = '18px Mitr';
+                canvasCtx.fillStyle = '#ffffff';
+                wrapText(canvasCtx, playerBio, cw/2, ch * 0.19, boxW - 40, 28);
+
+                // Draw Target Drop Slot
+                if (targetSlot) {
+                    canvasCtx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+                    canvasCtx.beginPath();
+                    canvasCtx.roundRect(targetSlot.x - targetSlot.width/2, targetSlot.y - targetSlot.height/2, targetSlot.width, targetSlot.height, 20);
+                    canvasCtx.fill();
+                    
+                    canvasCtx.lineWidth = 3;
+                    canvasCtx.strokeStyle = 'rgba(255, 255, 255, 0.65)';
+                    canvasCtx.setLineDash([8, 8]);
+                    canvasCtx.stroke();
+                    canvasCtx.setLineDash([]);
+                    
+                    canvasCtx.font = '16px Mitr';
+                    canvasCtx.fillStyle = '#94a3b8';
+                    canvasCtx.textAlign = 'center';
+                    canvasCtx.textBaseline = 'middle';
+                    canvasCtx.fillText("วางชื่อนักเตะที่ถูกต้องที่นี่", targetSlot.x, targetSlot.y - 30);
+                }
+
+                // Draw Choice Blocks
+                const drawBlock = (block, isDragging) => {
+                    canvasCtx.save();
+                    canvasCtx.translate(block.x, block.y);
+                    
+                    if (isDragging) {
+                        canvasCtx.scale(1.08, 1.08);
+                    }
+                    
+                    const bWidth = block.width;
+                    const bHeight = block.height;
+                    
+                    canvasCtx.fillStyle = 'rgba(0,0,0,0.5)';
+                    canvasCtx.beginPath();
+                    canvasCtx.roundRect(-bWidth/2 + 4, -bHeight/2 + 8, bWidth, bHeight, 16);
+                    canvasCtx.fill();
+
+                    canvasCtx.fillStyle = block.color;
+                    canvasCtx.beginPath();
+                    canvasCtx.roundRect(-bWidth/2, -bHeight/2, bWidth, bHeight, 16);
+                    canvasCtx.fill();
+                    
+                    canvasCtx.fillStyle = 'rgba(255,255,255,0.2)';
+                    canvasCtx.beginPath();
+                    canvasCtx.roundRect(-bWidth/2, -bHeight/2, bWidth, bHeight/2, [16, 16, 0, 0]);
+                    canvasCtx.fill();
+
+                    canvasCtx.strokeStyle = 'rgba(255,255,255,0.8)';
+                    canvasCtx.lineWidth = 2;
+                    canvasCtx.stroke();
+
+                    canvasCtx.fillStyle = 'white';
+                    canvasCtx.font = 'bold 21px Mitr';
+                    canvasCtx.textAlign = 'center';
+                    canvasCtx.textBaseline = 'middle';
+                    canvasCtx.shadowColor = 'rgba(0,0,0,0.6)';
+                    canvasCtx.shadowBlur = 6;
+                    canvasCtx.fillText(block.text, 0, 2);
+
+                    canvasCtx.restore();
+                };
+
+                choiceBlocks.forEach(block => {
+                    if (block !== draggedBlock) drawBlock(block, false);
+                });
+                if (draggedBlock) {
+                    drawBlock(draggedBlock, true);
+                }
+
+                // Draw Cursor Feedback Ring
+                const isHovering = choiceBlocks.some(b => 
+                    pointer.x >= b.x - b.width/2 && pointer.x <= b.x + b.width/2 &&
+                    pointer.y >= b.y - b.height/2 && pointer.y <= b.y + b.height/2
+                );
+
+                canvasCtx.beginPath();
+                canvasCtx.arc(pointer.x, pointer.y, 18, 0, Math.PI * 2);
+                canvasCtx.lineWidth = 3;
+                canvasCtx.setLineDash([]);
+                
+                if (draggedBlock) {
+                    canvasCtx.strokeStyle = '#10b981';
+                    canvasCtx.fillStyle = 'rgba(16, 185, 129, 0.35)';
+                    canvasCtx.fill();
+                    canvasCtx.stroke();
+                    
+                    canvasCtx.fillStyle = 'white';
+                    canvasCtx.font = '16px Arial';
+                    canvasCtx.textAlign = 'center';
+                    canvasCtx.textBaseline = 'middle';
+                    canvasCtx.fillText('✔️', pointer.x, pointer.y);
+                } 
+                else if (Date.now() - pointer.lastPinchMissTime < 300) {
+                    canvasCtx.strokeStyle = '#ef4444';
+                    canvasCtx.stroke();
+                }
+                else if (isHovering) {
+                    canvasCtx.strokeStyle = '#fbbf24';
+                    canvasCtx.setLineDash([4, 4]);
+                    canvasCtx.stroke();
+                }
+                else {
+                    canvasCtx.strokeStyle = '#38bdf8';
+                    canvasCtx.stroke();
+                    
+                    canvasCtx.beginPath();
+                    canvasCtx.arc(pointer.x, pointer.y, 3, 0, Math.PI * 2);
+                    canvasCtx.fillStyle = '#38bdf8';
+                    canvasCtx.fill();
+                }
+                canvasCtx.setLineDash([]);
+            }
+
+            function wrapText(context, text, x, y, maxWidth, lineHeight) {
+                const words = text.split(' ');
+                let line = '';
+                for(let n = 0; n < words.length; n++) {
+                    let testLine = line + words[n] + ' ';
+                    let metrics = context.measureText(testLine);
+                    let testWidth = metrics.width;
+                    if (testWidth > maxWidth && n > 0) {
+                        context.fillText(line, x, y);
+                        line = words[n] + ' ';
+                        y += lineHeight;
+                    } else {
+                        line = testLine;
+                    }
+                }
+                context.fillText(line, x, y);
+            }
+
+            function gameLoop() {
+                update();
+                draw();
+                requestAnimationFrame(gameLoop);
+            }
+
+            function startGame() {
+                loadingCamMsg.classList.remove('hidden');
+                btnStart.disabled = true;
+                
+                camera.start().then(() => {
+                    startScreen.classList.add('hidden');
+                    headerUi.classList.remove('hidden');
+                    aiStatus.classList.remove('hidden');
+                    gameState = 'PLAYING';
+                    currentLevel = 0;
+                    score = 0;
+                    scoreDisplay.innerText = score;
+                    initLevel(currentLevel);
+                }).catch(err => {
+                    console.error("Camera failed:", err);
+                    alert("ไม่สามารถเปิดกล้องได้ ระบบได้สลับเป็นโหมดใช้เมาส์เล่นแทนอัตโนมัติ");
+                    
+                    startScreen.classList.add('hidden');
+                    headerUi.classList.remove('hidden');
+                    aiStatus.classList.add('hidden');
+                    gameState = 'PLAYING';
+                    currentLevel = 0;
+                    score = 0;
+                    scoreDisplay.innerText = score;
+                    
+                    initLevel(currentLevel);
+                });
+            }
+
+            function endGame() {
+                gameState = 'GAMEOVER';
+                headerUi.classList.add('hidden');
+                aiStatus.classList.add('hidden');
+                gameOverScreen.classList.remove('hidden');
+                finalScoreEl.innerText = score;
+                canvasCtx.clearRect(0, 0, cw, ch);
+
+                // Populate verified solutions list
+                solutionsList.innerHTML = '';
+                levelsData.forEach((lvl, idx) => {
+                    const li = document.createElement('li');
+                    li.innerHTML = `<strong class="text-amber-300">ด่าน ${idx+1}:</strong> ${lvl.explanation}`;
+                    solutionsList.appendChild(li);
+                });
+            }
+
+            btnStart.addEventListener('click', startGame);
+            
+            btnRestart.addEventListener('click', () => {
+                gameOverScreen.classList.add('hidden');
+                headerUi.classList.remove('hidden');
+                gameState = 'PLAYING';
+                currentLevel = 0;
+                score = 0;
+                scoreDisplay.innerText = score;
+                if(pointer.source === 'hand') aiStatus.classList.remove('hidden');
+                initLevel(currentLevel);
+            });
+
+            requestAnimationFrame(gameLoop);
+        });
+    </script>
+</body>
+</html>
